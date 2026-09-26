@@ -15,7 +15,19 @@ The site also loads its typefaces from Google Fonts. There are no API keys or se
 
 ## Container deployment: Google Cloud Run
 
-Choose this route when you need to deliver the website as a Docker container. You need Docker Desktop (or another Docker Engine) running locally and the Google Cloud CLI (`gcloud`) installed. You also need access to the Google Cloud project and permission to create Artifact Registry repositories and Cloud Run services.
+Choose this route when you need to deliver the website as a Docker container. You need Docker Desktop (or another Docker Engine) running locally and the Google Cloud CLI (`gcloud`) installed. You also need access to the Google Cloud project and permission to create Artifact Registry repositories, Cloud Run services, and load-balancing resources.
+
+The custom-domain architecture requested for this site is:
+
+```text
+https://sgsaitechnology.com
+  ↓ DNS A record
+Global external HTTPS Application Load Balancer (reserved global IPv4)
+  ↓ regional serverless NEG
+Cloud Run: sgs-ai-website (asia-south1)
+```
+
+The load balancer terminates HTTPS using a Google-managed certificate and forwards requests to Cloud Run. Its global frontend IP is not the Cloud Run IP; the DNS A record must point to the reserved load-balancer IP. The instructions below configure this path. **DNS changes at the domain registrar/DNS host are a separate step** and require access to that account; this workspace cannot change the domain's live DNS records.
 
 ### Build and test the container locally
 
@@ -36,13 +48,13 @@ Stop the running container with **Ctrl+C**. The Docker build context excludes Gi
 
 ### Publish the image and deploy to Cloud Run
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), select or create the project to host the site. Record its **Project ID**. Choose a region close to your users and use that same region for Artifact Registry and Cloud Run.
-1. Authenticate and set the project. Replace the sample values with your project ID and chosen region (for example, `us-central1`):
+1. In the [Google Cloud Console](https://console.cloud.google.com/), select or create the project to host the site. Record its **Project ID**. This setup uses `asia-south1` for Cloud Run and the matching regional serverless NEG.
+1. Authenticate and set the project. Replace `YOUR_PROJECT_ID` with the project ID:
 
   ```sh
   gcloud auth login
   gcloud config set project YOUR_PROJECT_ID
-  gcloud services enable run.googleapis.com artifactregistry.googleapis.com
+  gcloud services enable run.googleapis.com artifactregistry.googleapis.com compute.googleapis.com
   ```
 
 1. Create a Docker repository in Artifact Registry. This only needs to be done once per project/region:
@@ -50,37 +62,131 @@ Stop the running container with **Ctrl+C**. The Docker build context excludes Gi
   ```sh
   gcloud artifacts repositories create sgsai-images \
     --repository-format=docker \
-    --location=YOUR_REGION \
+    --location=asia-south1 \
     --description="SGS AI website container images"
   ```
 
-1. Configure Docker authentication for that region and build a versioned image. Choose a new tag for each release rather than reusing an existing tag:
+1. Configure Docker authentication for the region and build a versioned image. Choose a new tag for each release rather than reusing an existing tag:
 
   ```sh
-  gcloud auth configure-docker YOUR_REGION-docker.pkg.dev
+  gcloud auth configure-docker asia-south1-docker.pkg.dev
   docker build --platform linux/amd64 \
-    -t YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1 .
+    -t asia-south1-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1 .
   ```
 
 1. Push the image to Artifact Registry:
 
   ```sh
-  docker push YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1
+  docker push asia-south1-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1
   ```
 
 1. Deploy that image as a Cloud Run service:
 
   ```sh
   gcloud run deploy sgs-ai-website \
-    --image YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1 \
-    --region YOUR_REGION \
+    --image asia-south1-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1 \
+    --region asia-south1 \
     --port 8080 \
+    --ingress internal-and-cloud-load-balancing \
     --allow-unauthenticated
   ```
 
-  The website is intentionally public. `--allow-unauthenticated` permits public visitors; your organization may prohibit public invoker access through policy. If so, coordinate with its administrator and use the approved public-access configuration. Cloud Run prints the HTTPS service URL when deployment completes.
+  The website is intentionally public. `--allow-unauthenticated` permits public visitors through the load balancer; Cloud Run ingress restricts public network traffic to the external load balancer. Your organization may prohibit public invoker access or this ingress setting through policy. If so, coordinate with its administrator and use the approved public-access configuration. Cloud Run prints its service URL when deployment completes.
 
 1. Open the service URL and verify the page and assets. Optionally confirm a successful HTTP response with `curl -I YOUR_CLOUD_RUN_URL`. In the Cloud Run console, review the active revision, logs, region, and service settings.
+
+### Configure the global HTTPS load balancer
+
+Run these commands after the Cloud Run service has been deployed. Keep the project selected with `gcloud config set project YOUR_PROJECT_ID`. The global IP address is billable while reserved; retain it for the lifetime of the domain and load balancer.
+
+1. Reserve a global static IPv4 address:
+
+   ```sh
+   gcloud compute addresses create sgsai-global-ip \
+     --global \
+     --ip-version=IPV4
+
+   gcloud compute addresses describe sgsai-global-ip \
+     --global \
+     --format='get(address)'
+   ```
+
+   Record the returned address as `LOAD_BALANCER_IP`.
+
+2. Create a global external Application Load Balancer backend using a regional serverless NEG. The NEG region must match the Cloud Run service region:
+
+   ```sh
+   gcloud compute network-endpoint-groups create sgsai-cloudrun-neg \
+     --region=asia-south1 \
+     --network-endpoint-type=serverless \
+     --cloud-run-service=sgs-ai-website
+
+   gcloud compute backend-services create sgsai-backend \
+     --global \
+     --load-balancing-scheme=EXTERNAL_MANAGED \
+     --protocol=HTTP
+
+   gcloud compute backend-services add-backend sgsai-backend \
+     --global \
+     --network-endpoint-group=sgsai-cloudrun-neg \
+     --network-endpoint-group-region=asia-south1
+   ```
+
+3. Create a URL map and a Google-managed certificate for the apex domain:
+
+   ```sh
+   gcloud compute url-maps create sgsai-url-map \
+     --global \
+     --default-service=sgsai-backend
+
+   gcloud compute ssl-certificates create sgsai-managed-cert \
+     --global \
+     --type=MANAGED \
+     --domains=sgsaitechnology.com
+   ```
+
+4. Attach the certificate to the HTTPS target proxy and bind the reserved IP to a global port 443 forwarding rule:
+
+   ```sh
+   gcloud compute target-https-proxies create sgsai-https-proxy \
+     --global \
+     --url-map=sgsai-url-map \
+     --ssl-certificates=sgsai-managed-cert
+
+   gcloud compute forwarding-rules create sgsai-https-forwarding-rule \
+     --global \
+     --load-balancing-scheme=EXTERNAL_MANAGED \
+     --address=sgsai-global-ip \
+     --target-https-proxy=sgsai-https-proxy \
+     --ports=443
+   ```
+
+5. At the domain's authoritative DNS provider (registrar or DNS host), set the apex/root record:
+
+   | Host/name | Type | Value | TTL |
+   | --- | --- | --- | --- |
+   | `@` (or blank, as required by provider) | `A` | `LOAD_BALANCER_IP` from step 1 | Provider default or 300 seconds |
+
+   Replace the value with the actual IP returned in step 1, not the literal text `LOAD_BALANCER_IP`. Remove or update conflicting apex `A` records that point elsewhere. Since this configuration reserves IPv4 only, remove any stale/conflicting apex `AAAA` record that points elsewhere; do not add an `AAAA` record unless you also configure an IPv6 load-balancer frontend. Preserve unrelated records, especially MX, SPF, DKIM, and DMARC records. If a DNS proxy/CDN is enabled at the provider, use DNS-only/direct resolution while validating the Google-managed certificate.
+
+  A public DNS lookup currently shows Squarespace nameservers (`nse1`–`nse4.squarespacedns.com`) and these apex A records: `198.49.23.145`, `198.185.159.145`, `198.49.23.144`, and `198.185.159.144`. When ready to cut over, replace those four web A records with the single global IP from step 1 in the Squarespace DNS settings. This will move the apex website from its current Squarespace destination to Google Cloud and can cause downtime if the load balancer or certificate is not ready. Preserve unrelated DNS records. A DNS lookup only reveals public DNS state; it does not grant access to modify records.
+
+  This covers `sgsaitechnology.com` only. To serve `www.sgsaitechnology.com` too, add `www.sgsaitechnology.com` to the managed certificate before creating it, and add a `www` DNS record pointing to the same global IP. A managed certificate's domain list cannot be edited in place; replacing it requires creating a new certificate and updating the target proxy.
+
+- **Check DNS and certificate provisioning.** DNS and certificate issuance can take time; do not assume HTTPS is ready until the certificate is `ACTIVE`:
+
+   ```sh
+   dig +short A sgsaitechnology.com
+   gcloud compute ssl-certificates describe sgsai-managed-cert \
+     --global \
+     --format='yaml(managed.status,managed.domainStatus)'
+   ```
+
+   The `dig` result should match the reserved global IP. Wait until the certificate status is `ACTIVE` and the domain status for `sgsaitechnology.com` is `ACTIVE`, then test `https://sgsaitechnology.com` in a browser. Provisioning may take an hour or more after DNS is correct, and DNS propagation can take longer. Keep DNS pointing directly to the load-balancer IP for certificate issuance and renewal.
+
+- **Optional: disable the Cloud Run default `run.app` URL** after confirming the load balancer works, to reduce the chance of bypassing the load balancer. In the Cloud Run console, open the service's **Networking** settings and disable **Default HTTPS endpoint URL**. Check integrations first: disabling this endpoint can affect services that call Cloud Run using its `run.app` URL.
+
+This configures HTTPS on port 443. If you also want `http://sgsaitechnology.com` to redirect to HTTPS, add an HTTP frontend on port 80 with a URL map configured for an HTTPS redirect, using the same reserved IP. The external HTTPS load balancer has ongoing forwarding-rule and data-processing costs; review current Google Cloud load-balancing pricing and quotas.
 
 ### Updating and rolling back a Cloud Run container
 
