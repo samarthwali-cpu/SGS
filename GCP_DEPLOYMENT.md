@@ -1,6 +1,6 @@
 # Deploy SGS AI Technology to Google Cloud
 
-This guide deploys the current static website to **Firebase Hosting**, Google's managed static web hosting service for Firebase projects backed by Google Cloud. It provides global CDN delivery, automatic HTTPS, preview channels, and custom-domain support without requiring a server or build step.
+This guide covers two Google Cloud deployment options for the current static website. **Firebase Hosting** is the simplest and recommended route for a static site, with a global CDN, HTTPS, and preview channels. If you specifically need a container, use the included Docker image and deploy it to **Cloud Run**. Cloud Run runs a small Nginx web server in a container and provides a managed HTTPS endpoint.
 
 ## What this deploys
 
@@ -11,7 +11,86 @@ The site is plain HTML, CSS, and JavaScript. There is no framework build command
 - `script.js` — mobile navigation and current-year footer
 - `logo/sgsai-logo.png` — supplied SGS AI Technology logo
 
-The site also loads its typefaces from Google Fonts. There are no API keys or server-side secrets in the current frontend.
+The site also loads its typefaces from Google Fonts. There are no API keys or server-side secrets in the current frontend. The Docker image uses the unprivileged Nginx image, listens on port 8080, and serves the same files with basic security headers and static-asset caching.
+
+## Container deployment: Google Cloud Run
+
+Choose this route when you need to deliver the website as a Docker container. You need Docker Desktop (or another Docker Engine) running locally and the Google Cloud CLI (`gcloud`) installed. You also need access to the Google Cloud project and permission to create Artifact Registry repositories and Cloud Run services.
+
+### Build and test the container locally
+
+Run these commands from the project root—the folder containing `Dockerfile` and `index.html`:
+
+```sh
+docker build -t sgs-ai-website:local .
+docker run --rm --name sgs-ai-website -p 8080:8080 sgs-ai-website:local
+```
+
+Open <http://localhost:8080> and verify the page, mobile navigation, styles, script, and logo. You can also check that the server responds with:
+
+```sh
+curl -I http://localhost:8080/
+```
+
+Stop the running container with **Ctrl+C**. The Docker build context excludes Git metadata and documentation, and includes the required site assets and Nginx configuration.
+
+### Publish the image and deploy to Cloud Run
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/), select or create the project to host the site. Record its **Project ID**. Choose a region close to your users and use that same region for Artifact Registry and Cloud Run.
+1. Authenticate and set the project. Replace the sample values with your project ID and chosen region (for example, `us-central1`):
+
+  ```sh
+  gcloud auth login
+  gcloud config set project YOUR_PROJECT_ID
+  gcloud services enable run.googleapis.com artifactregistry.googleapis.com
+  ```
+
+1. Create a Docker repository in Artifact Registry. This only needs to be done once per project/region:
+
+  ```sh
+  gcloud artifacts repositories create sgsai-images \
+    --repository-format=docker \
+    --location=YOUR_REGION \
+    --description="SGS AI website container images"
+  ```
+
+1. Configure Docker authentication for that region and build a versioned image. Choose a new tag for each release rather than reusing an existing tag:
+
+  ```sh
+  gcloud auth configure-docker YOUR_REGION-docker.pkg.dev
+  docker build --platform linux/amd64 \
+    -t YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1 .
+  ```
+
+1. Push the image to Artifact Registry:
+
+  ```sh
+  docker push YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1
+  ```
+
+1. Deploy that image as a Cloud Run service:
+
+  ```sh
+  gcloud run deploy sgs-ai-website \
+    --image YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/sgsai-images/sgs-ai-website:v1 \
+    --region YOUR_REGION \
+    --port 8080 \
+    --allow-unauthenticated
+  ```
+
+  The website is intentionally public. `--allow-unauthenticated` permits public visitors; your organization may prohibit public invoker access through policy. If so, coordinate with its administrator and use the approved public-access configuration. Cloud Run prints the HTTPS service URL when deployment completes.
+
+1. Open the service URL and verify the page and assets. Optionally confirm a successful HTTP response with `curl -I YOUR_CLOUD_RUN_URL`. In the Cloud Run console, review the active revision, logs, region, and service settings.
+
+### Updating and rolling back a Cloud Run container
+
+For each website release, build and push a new, unique image tag (for example, `v2`) and deploy that image with the same `gcloud run deploy` command. Cloud Run creates a new revision. To roll back, use **Cloud Run → service → Revisions** in the Google Cloud Console and route traffic back to the known-good revision. Keep the previous image available in Artifact Registry until no longer needed.
+
+Cloud Run is a managed container service and may incur charges based on resource usage and configuration. Review current Cloud Run and Artifact Registry pricing, quotas, and billing alerts for your project. For a static website without container requirements, Firebase Hosting usually has less operational overhead.
+
+## Firebase Hosting deployment (static site)
+
+Use the steps below instead when you prefer the managed static hosting route. No container or build step is needed.
 
 ## 1. Create or select a Google Cloud project
 
@@ -157,15 +236,15 @@ Choose the correct repository and production branch, review the workflow files t
 ## Updating the website
 
 1. Edit the website files and test them locally.
-2. Review the changes in a Hosting preview channel or GitHub pull request preview.
-3. Deploy the approved version with `firebase deploy --only hosting --project YOUR_PROJECT_ID`, or merge to the configured production branch if GitHub deployment is enabled.
-4. Check the published page and browser console after deployment.
+2. Review the changes in a Hosting preview channel or GitHub pull request preview. For the container route, rebuild and run the Docker image locally before publishing.
+3. Deploy the approved version with `firebase deploy --only hosting --project YOUR_PROJECT_ID` for Firebase Hosting, or build/push a new image tag and deploy it with `gcloud run deploy` for Cloud Run. If GitHub deployment is enabled for Hosting, merge to the configured production branch.
+4. Check the published page and browser console after deployment. For Cloud Run, also confirm the new revision is receiving traffic.
 
-There is no `npm run build` step for the current site. If a framework or bundler is introduced later, build its production output and change `hosting.public` to that output directory (often `dist` or `build`) rather than publishing the project root.
+There is no `npm run build` step for the current site. If a framework or bundler is introduced later, build its production output and change `hosting.public` to that output directory (often `dist` or `build`) and update the Dockerfile to copy that output rather than the project root.
 
 ## Rollback
 
-If a release causes a problem, open **Firebase Console → Hosting → Release history**, select the last known-good release, and use the rollback action if available. Alternatively, restore the known-good website files from version control and redeploy them to the same project. Verify the live URL and assets after rollback.
+If a Firebase Hosting release causes a problem, open **Firebase Console → Hosting → Release history**, select the last known-good release, and use the rollback action if available. For Cloud Run, route traffic back to a known-good revision as described above. You can also restore known-good website files from version control and redeploy them. Verify the live URL and assets after rollback.
 
 ## Troubleshooting
 
@@ -175,6 +254,9 @@ If a release causes a problem, open **Firebase Console → Hosting → Release h
 - **CSS or JavaScript changes do not appear:** hard-refresh the browser, check the deployed release timestamp, and allow for the one-hour asset cache. For urgent fixes, consider temporarily lowering the CSS/JS cache duration and redeploying.
 - **A custom domain is not active:** check the exact DNS records in Firebase Hosting, remove conflicting web-hosting records only when safe, and allow DNS and certificate provisioning to complete.
 - **The navigation does not work at the deployed URL:** confirm `script.js` was included in the release and check the browser console for a failed asset request or JavaScript error.
+- **Docker is unavailable or the daemon is stopped:** start Docker Desktop (or the configured Docker Engine) and rerun the build.
+- **Cloud Run rejects an image or cannot start the container:** build for `linux/amd64`, confirm Nginx listens on port 8080, and check the Cloud Run revision logs for startup errors.
+- **Artifact Registry denies a push:** confirm the image URI uses the correct project ID and region, Docker authentication was configured for `YOUR_REGION-docker.pkg.dev`, and your account has permission to upload images.
 
 ## Security and operations checklist
 

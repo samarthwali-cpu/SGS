@@ -1,0 +1,11 @@
+.git
+.gitignore
+.DS_Store
+.firebase
+.firebaserc
+firebase.json
+node_modules
+npm-debug.log
+GCP_DEPLOYMENT.md
+Dockerfile
+.dockerignore
