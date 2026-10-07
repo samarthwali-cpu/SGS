@@ -209,7 +209,7 @@
 @media(max-width:900px){ .service-card{padding:18px;height:370px} .service-card h3{font-size:23px} }
 @media(max-width:650px){ .services-section{padding:70px 0} .section-heading{display:block;margin-bottom:27px} .section-heading h2{font-size:39px} .section-heading-aside{font-size:11px;margin:14px 0 0;max-width:390px} .service-grid{grid-template-columns:1fr;gap:11px} .service-card{height:310px;padding:20px} .service-card h3{font-size:25px;margin-top:16px} .service-card p{font-size:10px;max-width:250px} .card-link{bottom:20px;left:20px} }
 
-/* PRODUCTS SECTION ANIMATIONS & EFFECTS */
+/* SERVICES SECTION ANIMATIONS & EFFECTS */
 
 /* Card Hover Enhancements */
 .service-card {

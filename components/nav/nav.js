@@ -24,25 +24,19 @@ if (menuToggle && navigation) {
   });
 }
 
-// Active navigation highlight using IntersectionObserver
-const sections = document.querySelectorAll('section[id]');
+// Active navigation highlight based on URL
 const navLinks = document.querySelectorAll('.navigation a:not(.nav-cta)');
-
-if (sections.length > 0 && navLinks.length > 0) {
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        navLinks.forEach(link => {
-          link.style.color = ''; // reset
-          if (link.getAttribute('href') === `#${entry.target.id}`) {
-            link.style.color = 'var(--purple)';
-          }
-        });
-      }
-    });
-  }, { threshold: 0.5 });
-  
-  sections.forEach(sec => observer.observe(sec));
+if (navLinks.length > 0) {
+  const currentPath = window.location.pathname.replace('.html', '').replace(/\/$/, '');
+  navLinks.forEach(link => {
+    link.style.color = ''; // reset
+    const linkPath = new URL(link.href).pathname.replace('.html', '').replace(/\/$/, '');
+    if (linkPath === currentPath) {
+      link.style.color = 'var(--purple)';
+    } else if (currentPath === '/' && linkPath.endsWith('/index')) {
+      link.style.color = 'var(--purple)';
+    }
+  });
 }
 
 // Header scroll state
