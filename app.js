@@ -57,11 +57,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Handle legacy hashes mapping
   const hashMapping = {
-    '#products': '/services',
-    '#vision': '/vision',
-    '#about': '/about',
-    '#roadmap': '/roadmap',
-    '#approach': '/vision'
+    '#products': '/SGS/services',
+    '#vision': '/SGS/vision',
+    '#about': '/SGS/about',
+    '#roadmap': '/SGS/roadmap',
+    '#approach': '/SGS/vision'
   };
 
   const handleHash = () => {
