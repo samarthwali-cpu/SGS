@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   for (const comp of components) {
     try {
       // 1. Fetch HTML
-      const response = await fetch(`./${comp.path}.html?v=${new Date().getTime()}`);
+      const response = await fetch(`/SGS/${comp.path}.html?v=${new Date().getTime()}`);
       if (response.ok) {
         const html = await response.text();
         const container = document.getElementById(comp.id);
@@ -26,14 +26,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (comp.hasCss) {
           const link = document.createElement('link');
           link.rel = 'stylesheet';
-          link.href = `./${comp.path}.css?v=${new Date().getTime()}`;
+          link.href = `/SGS/${comp.path}.css?v=${new Date().getTime()}`;
           document.head.appendChild(link);
         }
 
         // 3. Load JS
         if (comp.hasJs) {
           const script = document.createElement('script');
-          script.src = `./${comp.path}.js`;
+          script.src = `/SGS/${comp.path}.js`;
           script.defer = true;
           document.body.appendChild(script);
         }
